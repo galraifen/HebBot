@@ -199,6 +199,37 @@ Helsinki-NLP supports 1,000+ pairs. If a direct pair like `ja→fr` doesn't exis
 | Hebrew/Arabic/CJK → English | Always use `--whisper-translate` |
 | GPU available | Torch will auto-detect CUDA — much faster |
 | Re-watching same video | SRT is cached in `output/` — edit `bot.py` to skip retranscription |
+| Nightly batch, best quality | Use `turbo` or `large` model in `BOT_DEFAULTS` in `run_batch.py` — let it run overnight |
+| Nightly batch, low-end machine | Use `small` model — faster but less accurate for Hebrew |
+
+### Recommended nightly batch setup for Hebrew
+
+If the `small` model isn't accurate enough, switch to `turbo` or `large` in `run_batch.py`:
+
+```python
+BOT_DEFAULTS = [
+    "--whisper-translate",
+    "--whisper-model", "turbo",   # or "large" for best accuracy
+    "--no-play",
+]
+```
+
+Then make sure WSL has enough memory in `C:\Users\<YourName>\.wslconfig`:
+```ini
+[wsl2]
+memory=10GB
+processors=4
+```
+
+A rough estimate of overnight processing time on CPU:
+
+| Model | Time per 30min episode |
+|---|---|
+| `small` | ~5 min |
+| `turbo` | ~30 min |
+| `large` | ~60 min |
+
+So with `turbo`, a batch of 10 episodes takes roughly 5 hours — easily fits in an overnight run.
 
 ---
 
@@ -211,3 +242,70 @@ Helsinki-NLP supports 1,000+ pairs. If a direct pair like `ja→fr` doesn't exis
 **Helsinki model not found for language pair**: Check available models at https://huggingface.co/Helsinki-NLP — not all pairs exist directly. Try `--whisper-translate` instead if targeting English.
 
 **WSL display issues with mpv**: Make sure you have an X server running (e.g. [VcXsrv](https://sourceforge.net/projects/vcxsrv/) or use WSL2 with WSLg enabled on Windows 11).
+
+---
+
+## 🌙 Nightly Batch Runs
+
+### Setup
+
+1. Fill `episodes.txt` with one YouTube URL per line:
+```
+# comments are ignored
+https://youtu.be/episode1
+https://youtu.be/episode2
+```
+
+2. Run the batch manually to test:
+```bash
+python3 run_batch.py --dry-run    # preview without doing anything
+python3 run_batch.py              # actually run
+```
+
+Already-processed episodes are automatically skipped (checks if a matching `.srt` exists in `output/`).
+
+---
+
+### Changing batch settings
+
+Edit the `BOT_DEFAULTS` list at the top of `run_batch.py` to change the whisper model, language, etc. for all batch runs:
+
+```python
+BOT_DEFAULTS = [
+    "--whisper-translate",
+    "--whisper-model", "small",   # change to "turbo" or "large" if you want
+    "--no-play",
+]
+```
+
+---
+
+### Schedule with cron (runs every night at 2am)
+
+```bash
+crontab -e
+```
+
+Add this line:
+```
+0 2 * * * cd /home/am/Projects/HebBot && .venv/bin/python3 run_batch.py >> logs/cron.log 2>&1
+```
+
+> ⚠️ Replace `/home/am/Projects/HebBot` with your actual project path.
+
+Each run creates a timestamped log in `logs/` (e.g. `logs/batch_20260313_020001.log`).
+
+---
+
+### Project structure with batch
+
+```
+yt-translator/
+├── bot.py              ← single video processor
+├── run_batch.py        ← batch runner
+├── episodes.txt        ← your queue of URLs
+├── requirements.txt
+├── downloads/          ← raw downloaded videos
+├── output/             ← ready-to-watch .srt + videos
+└── logs/               ← one log file per batch run
+```

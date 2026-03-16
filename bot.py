@@ -36,29 +36,62 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ─── Step 1: Download ─────────────────────────────────────────────────────────
 
+def get_video_title(url: str) -> str:
+    """Fetch just the video title from YouTube without downloading."""
+    try:
+        result = subprocess.run(
+            ["python3", "-m", "yt_dlp", "--get-filename",
+             "-o", "%(title)s.mp4", "--no-playlist", url],
+            capture_output=True, text=True, timeout=15
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
 def download_video(url: str) -> Path:
-    print("\n📥  Downloading video...")
+    print("\n📥  Checking download cache...")
+
+    # Ask yt-dlp what filename it would use, without downloading
+    expected_filename = get_video_title(url)
+    if expected_filename:
+        # Compare stem only, ignore extension
+        title_stem = Path(expected_filename).stem.lower()
+        matches = [
+            f for f in DOWNLOADS_DIR.iterdir()
+            if f.is_file() and f.stem.lower() == title_stem
+        ]
+        if matches:
+            print(f"   ⏭️  Already downloaded, skipping: {matches[0]}")
+            return matches[0]
+
+    print("   Downloading...")
     ydl_opts = {
         "outtmpl": str(DOWNLOADS_DIR / "%(title)s.%(ext)s"),
-        # bestvideo + bestaudio, but prefer mp4/m4a to avoid Opus audio
+        # Prefer mp4+m4a (AAC audio) to avoid Opus which some players can't handle
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
-        # Re-encode audio to AAC so VLC / Windows Media Player can play it
-        "postprocessors": [{
-            "key": "FFmpegAudioConvertor",
-            "preferedcodec": "aac",
-        }],
         "quiet": False,
         "no_warnings": False,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
-        # Normalize extension after merge
         path = Path(filename).with_suffix(".mp4")
         if not path.exists():
-            # Try the raw filename in case extension didn't change
             path = Path(filename)
+
+    # If audio is still Opus, re-encode to AAC via ffmpeg
+    aac_path = path.with_stem(path.stem + "_aac")
+    print("   🔄  Re-encoding audio to AAC for compatibility...")
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(path),
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        str(aac_path)
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    path.unlink()  # remove original
+    aac_path.rename(path)  # rename back to original name
+
     print(f"   ✅  Saved to: {path}")
     return path
 
@@ -175,7 +208,7 @@ def burn_subtitles(video_path: Path, srt_path: Path) -> Path:
         [
             "ffmpeg", "-y",
             "-i", str(video_path),
-            "-vf", f"subtitles='{safe_srt}':force_style='FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2'",
+            "-vf", f"subtitles='{safe_srt}':force_style='FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=3,Shadow=2,BorderStyle=3,BackColour=&H80000000'",
             "-c:a", "copy",
             str(output_path),
         ],
@@ -189,7 +222,14 @@ def burn_subtitles(video_path: Path, srt_path: Path) -> Path:
 
 def play_video(video_path: Path, srt_path: Path = None, burn: bool = False):
     print(f"\n▶️   Launching mpv...")
-    cmd = ["mpv", "--fs"]
+    cmd = [
+        "mpv", "--fs",
+        "--sub-font-size=40",
+        "--sub-back-color=0.0/0.0/0.0/0.6",   # semi-transparent black box behind subs
+        "--sub-border-size=3",
+        "--sub-color=1.0/1.0/1.0/1.0",         # white text
+        "--sub-pos=90",                          # push subs slightly higher to avoid overlap
+    ]
     if srt_path and not burn:
         cmd += [f"--sub-file={srt_path}"]
     cmd.append(str(video_path))
